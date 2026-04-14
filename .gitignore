@@ -1,0 +1,5 @@
+# Environment variables
+.env
+
+# Sample data folder
+sample_data/
