@@ -1,13 +1,15 @@
 JD_PROMPT = """
 You are an expert ATS system analyzing Job Descriptions.
+
 IMPORTANT:
 - Return ONLY valid JSON
 - No explanation
 - No markdown
 - No extra text
-- Response MUST start with '{{' and end with '}}'
+- Response MUST start with '{' and end with '}'
+
 Return STRICT JSON:
-{{
+{
   "title": "",
   "primary_skills": [],
   "good_to_have": [],
@@ -17,53 +19,80 @@ Return STRICT JSON:
   "location": "",
   "employment_type": "",
   "seniority_level": ""
-}}
-RULES:
+}
+RULES
 TITLE:
 - Extract exact job title from JD
-SKILLS EXTRACTION:
-- Extract skills from requirements, responsibilities, and tech stack
-- PRIMARY SKILLS:
-  - Mandatory or frequently mentioned skills
-  - Indicators: "must", "required", "mandatory"
-- GOOD TO HAVE:
-  - Optional or preferred skills
-  - Indicators: "preferred", "nice to have", "plus"
-- MUST HAVE KEYWORDS:
-  - Core concepts like API Development, Microservices, Cloud, Agile
-- Normalize:
-  - AWS EC2, S3 → AWS
-  - RESTful services → REST API
+SKILLS EXTRACTION RULES
+GENERAL RULE:
+- Extract skills ONLY from job description content
 - Remove duplicates
-- Exclude soft skills
-EXPERIENCE:
+- Exclude soft skills (communication, teamwork, leadership, etc.)
+- Normalize skill names (e.g., AWS EC2 → AWS, RESTful services → REST API)
+
+STRICT CLASSIFICATION RULE (MOST IMPORTANT)
+- Each skill MUST belong to ONLY ONE category:
+  either PRIMARY or GOOD_TO_HAVE (never both)
+
+- PRIMARY SKILLS (MUST HAVE):
+  - Skills explicitly marked as "Must have", "Required", "Mandatory"
+  - Core technical skills required for job execution
+  - Skills essential for day-to-day development or system design
+
+- GOOD TO HAVE:
+  - Skills explicitly marked as "Preferred", "Nice to have", "Plus"
+  - Optional, secondary, or supporting technologies
+  - Example: WebSocket, log4j2, Basic UI Knowledge, testing tools, monitoring tools
+
+STRICT SECTION BOUNDARY RULE
+- If JD contains clearly labeled sections:
+    - "Must have" → PRIMARY
+    - "Good to have" → GOOD_TO_HAVE
+
+- If sections are unclear or mixed:
+    - Use ONLY explicit keywords ("must", "required", "preferred")
+    - Do NOT guess based on formatting, alignment, or position
+ANTI-ASSUMPTION RULE (CRITICAL)
+- Do NOT infer skill importance from proximity in text
+- Do NOT assign category based on row alignment or formatting
+- Do NOT upgrade GOOD_TO_HAVE to PRIMARY unless explicitly stated
+- Do NOT hallucinate skills or restructure meaning
+MUST HAVE KEYWORDS
+- Extract only core architectural/technical concepts:
+  API Development, Microservices, Cloud, Agile, System Design
+
+EXPERIENCE RULES
 - "2-4 years" → min=2, max=4
 - "3+ years" → min=3, max=0
 - "Minimum 5 years" → min=5, max=0
 - "Fresher" → min=0, max=0
 - Not mentioned → min=0, max=0
-LOCATION:
-- Extract if available
-EMPLOYMENT TYPE:
-- Full-time, Contract, Internship
-SENIORITY LEVEL:
-- Junior, Mid, Senior, Lead
-GENERAL:
-- Do NOT hallucinate
-- If not found → return "" or []
 
+LOCATION RULE
+- Extract if explicitly mentioned
+EMPLOYMENT TYPE
+- Full-time, Contract, Internship
+SENIORITY LEVEL
+- Junior, Mid, Senior, Lead
+FINAL SAFETY RULES
+- Do NOT hallucinate any field
+- If not found → return "" or []
+- Ensure consistency between primary_skills and good_to_have
+- A skill cannot appear in both lists
 JD:
 {text}
 """
 RESUME_PROMPT = """
 You are an expert resume parsing system.
+
 IMPORTANT:
 - Return ONLY valid JSON
 - No explanation
 - No extra text
-- Response MUST start with '{{' and end with '}}'
+- Response MUST start with '{' and end with '}'
+
 Return STRICT JSON ONLY:
-{{
+{
   "name": "",
   "email": "",
   "phone": "",
@@ -71,50 +100,207 @@ Return STRICT JSON ONLY:
   "location": "",
   "skills": [],
   "experience": [
-    {{
+    {
       "role": "",
       "company": "",
       "start_date": "",
       "end_date": "",
       "description": ""
-    }}
+    }
   ],
   "education": [
-     {{
+    {
       "degree": "",
       "institute": "",
       "year": ""
-    }}
+    }
   ]
-}}
+}
+
+------------------------------------------------------------
+TOTAL EXPERIENCE RULE
+------------------------------------------------------------
+
+- Look for phrases like:
+  "5+ years of experience", "Around 11 Years", "Total 8 years"
+- Convert to float (e.g., 5+ years → 5.0, 8.5 years → 8.5)
+- If mentioned in summary/profile → this is mandatory to extract
+
+------------------------------------------------------------
+LAYOUT NORMALIZATION RULE (VERY IMPORTANT)
+------------------------------------------------------------
+
+- Resume text may come from PDF/OCR with broken formatting
+- Ignore visual structure (columns, spacing, alignment)
+- Treat all text as continuous stream
+- Reconstruct meaning using context, not position
+
+------------------------------------------------------------
+TABLE HANDLING RULE (CRITICAL)
+------------------------------------------------------------
+
+- Resumes may contain tables or column-based layouts
+
+SKILLS IN TABLES:
+- Extract skills from ALL table formats (Technical Skills, Core Skills, Matrix, Grid)
+- Do NOT skip skills due to column layout
+- Read table row-wise first, then infer columns if needed
+
+EXPERIENCE IN TABLES:
+- Each row represents one experience entry
+- Map fields carefully:
+  role, company, start_date, end_date, description
+- If data is split across columns, infer mapping using labels and context
+- Do NOT merge multiple rows into one experience
+
+------------------------------------------------------------
+SKILLS EXTRACTION (GLOBAL DEEP SCAN)
+------------------------------------------------------------
+
+- Extract skills from ALL sections:
+  1. Technical Skills / Summary sections
+  2. Professional Experience bullet points
+  3. Project descriptions
+  4. Certifications and training
+
+DUAL EXTRACTION:
+- Explicit: directly mentioned technologies/tools
+- Semantic: infer skills from context ONLY when strongly supported
+- Do NOT overgeneralize tools into frameworks
+- Do NOT assume technologies not explicitly mentioned
+- Prefer precision over recall
+
+INCLUDE:
+- Programming languages, frameworks, tools, cloud, databases, core concepts
+
+NORMALIZATION:
+- AWS EC2 / S3 → AWS
+- RESTful services → REST API
+
 RULES:
-TOTAL EXPERIENCE:
-- Look for summary statements like "5+ years of experience", "Around 11 Years", or "Total 8 years".
-- Convert to a float (e.g., "5+ years" → 5.0, "8.5 years" → 8.5).
-- This is mandatory if the candidate mentions it in their profile summary.
-SKILLS EXTRACTION:
-- Extract from BOTH skills section AND experience descriptions
-- Include:
-  - Languages, frameworks, tools, cloud, databases, concepts
-- Semantic extraction:
-  - "Built REST APIs using Flask" → Flask, REST API
-  - "Tested APIs using Postman" → Postman, API Testing
-- Normalize:
-  - AWS EC2, S3 → AWS
-  - RESTful services → REST API
 - Remove duplicates
-- Exclude soft skills
-EXPERIENCE:
-- Extract all roles
-- Infer role if missing
+- Exclude soft skills (communication, teamwork, leadership)
+
+------------------------------------------------------------
+EXPERIENCE RULES
+------------------------------------------------------------
+
+- Extract all job roles separately
+- Infer role if missing from context
+
 DATES:
-- Allowed: Jan 2024, 2024, Present
+- Allowed formats: Jan 2024, 2024, Present
 - Use "Present" for current role
-- DO NOT calculate duration in the experience list
-GENERAL:
+- DO NOT calculate duration inside experience entries
+
+------------------------------------------------------------
+ANTI-LOSS RULE (VERY IMPORTANT)
+------------------------------------------------------------
+
+- Do NOT skip any section due to formatting issues
+- Do NOT rely on visual layout
+- Do NOT ignore table data or columns
+- Always extract maximum possible structured data
+
+------------------------------------------------------------
+GENERAL RULES
+------------------------------------------------------------
+
 - Do NOT hallucinate
-- Unknown → ""
+- If unknown → ""
+- If not found → []
+
+------------------------------------------------------------
+
 Resume Text:
+{text}
+"""
+SKILL_EXTRACTION_PROMPT = """
+You are an expert resume skill extraction engine.
+
+Extract ALL technical skills from the resume text.
+
+------------------------------------------------------------
+INCLUDE
+------------------------------------------------------------
+
+- Programming languages
+- Frameworks
+- Tools
+- Databases
+- Cloud platforms
+- Core concepts (OOPs, Design Patterns, Multithreading, etc.)
+
+------------------------------------------------------------
+EXTRACTION STRATEGY (VERY IMPORTANT)
+------------------------------------------------------------
+
+Perform deep scanning across ALL sections:
+- Technical Skills
+- Work Experience
+- Project descriptions
+- Certifications
+
+Extract:
+1. Explicit skills → directly mentioned technologies
+2. Context-based skills → ONLY when clearly supported by strong evidence
+
+------------------------------------------------------------
+NORMALIZATION RULES
+------------------------------------------------------------
+
+- Normalize variations into standard forms:
+  - "aws ec2", "s3" → "AWS"
+  - "restful services" → "REST API"
+  - "oops concepts" → "OOPs"
+
+- Ensure consistent casing (e.g., "java" → "Java")
+
+- Remove duplicates
+
+------------------------------------------------------------
+CONTROLLED INFERENCE RULE (CRITICAL)
+------------------------------------------------------------
+
+Infer higher-level concepts ONLY when there is STRONG supporting evidence.
+
+VALID INFERENCE EXAMPLES:
+- AWS EC2, S3 → AWS
+- Multiple AWS services → Cloud
+- REST API → Web Services
+- Multithreading → Concurrency
+
+STRICT RESTRICTIONS:
+- Do NOT infer tools or frameworks unless explicitly mentioned
+- Do NOT assume libraries (e.g., log4j2, Hibernate) without direct evidence
+- Do NOT overgeneralize technologies
+
+IMPORTANT DISTINCTIONS:
+- Web Services ≠ WebSocket
+- Logging ≠ log4j2
+- HTML/CSS ≠ UI Design (unless explicitly stated)
+- Spring ≠ Spring Boot (unless explicitly mentioned)
+
+------------------------------------------------------------
+ANTI-HALLUCINATION RULE
+------------------------------------------------------------
+
+- Do NOT add skills that are not present or clearly implied
+- Do NOT guess missing technologies
+- Prefer missing a skill over adding an incorrect one
+
+------------------------------------------------------------
+FINAL OUTPUT RULES
+------------------------------------------------------------
+
+- Return ONLY a valid JSON array
+- No explanation
+- No extra text
+- No markdown
+
+------------------------------------------------------------
+
+Resume:
 {text}
 """
 CLASSIFY_PROMPT = """
@@ -143,43 +329,115 @@ DESCRIPTION:
 {description}
 """
 SKILL_MAPPER_PROMPT = """
-You are a high-precision Technical Skill Mapping Engine. 
-Your goal is to identify if a candidate possesses the skills required by a Job Description (JD), even if the terminology differs.
+You are a high-precision Technical Skill Mapping Engine for ATS systems.
 
+Your goal is to map candidate skills to JD requirements using semantic similarity, technical equivalence, and controlled categorical inference.
+
+------------------------------------------------------------
+INPUTS
+------------------------------------------------------------
 JD REQUIREMENTS: {jd_requirements}
 CANDIDATE SKILLS: {candidate_skills}
 
-TASK:
-1. Map candidate skills to JD requirements using semantic and technical similarity.
-2. If a candidate lists a specific TOOL, it matches the CATEGORY in the JD (e.g., Jenkins -> CI/CD).
-3. If a candidate lists a SPECIFIC technology, it matches the GENERAL requirement in the JD (e.g., PyTest -> Test Automation).
+------------------------------------------------------------
+TASK
+------------------------------------------------------------
+1. Map each JD skill to the most relevant candidate skill (if exists).
+2. Perform "Category-to-Tool" mapping ONLY when the relationship is strong and industry-standard.
+3. Apply controlled inference: Only infer relationships that are widely accepted and technically accurate.
+4. Allow one candidate skill to satisfy multiple JD skills if it genuinely covers those domains.
 
-LOGIC RULES:
-- TOOL TO CATEGORY: 
-    - Selenium, PyTest, JUnit, TestRail -> Test Automation / Automation Testing
-    - Postman, REST API, SoapUI -> API Testing
-    - Jenkins, Git, GitLab, Docker -> CI/CD tools / DevOps
-    - React, Angular, Vue -> Frontend
-- SYNONYM MATCHING:
-    - SQL, NoSQL, MongoDB, PostgreSQL -> Databases
-    - Machine Learning, Scikit-learn -> Machine Learning basics
-    - Neural Networks, PyTorch, TensorFlow -> Deep Learning
-- ALIASING:
-    - AWS -> Amazon Web Services, EC2, S3
-    - K8s -> Kubernetes
+------------------------------------------------------------
+MANDATORY INFERENCE RULES (CONTROLLED)
+------------------------------------------------------------
+Apply inference ONLY when the relationship is strong and commonly accepted:
 
-STRICT CONSTRAINTS:
-- ONLY return valid JSON.
-- No conversational text or explanations.
-- If a candidate has multiple tools for one JD skill (e.g., Selenium and PyTest for "Test Automation"), only list the JD skill once with the most relevant candidate skill.
+- Java / C++ / C# → OOPS Concepts, Object Oriented Programming, Multithreading.
+- Spring Boot / Django / Express / NestJS → REST API, Microservices, Web Services.
+- SQL / MySQL / PostgreSQL / Oracle → Relational Databases, RDBMS.
+- React / Angular / Vue → Frontend Development, JavaScript, Web Technologies.
+- AWS / Azure / GCP → Cloud Platforms, Cloud Computing.
 
-OUTPUT STRUCTURE:
-{{
+------------------------------------------------------------
+⚠️ CROSS-ECOSYSTEM CONSTRAINTS (CRITICAL)
+------------------------------------------------------------
+Do NOT match skills across fundamentally different ecosystems or technology stacks.
+
+INVALID matches include:
+- Java ↔ C#
+- Java ↔ .NET
+- Python ↔ Java
+- SQL ↔ NoSQL
+- Docker ↔ Kubernetes (related but NOT equivalent)
+
+Rules:
+- Only match within the SAME ecosystem or clearly compatible technologies.
+- If ecosystems differ → DO NOT MATCH (even if semantically similar).
+- Prefer strict correctness over broad similarity.
+
+------------------------------------------------------------
+CATEGORY & TOOL RELATIONSHIP
+------------------------------------------------------------
+- Category mapping is allowed ONLY when:
+  - The candidate tool clearly belongs to that category
+  - The mapping is widely accepted in industry
+
+VALID examples:
+- AWS → Cloud
+- MySQL → Database
+- Docker → Containerization
+
+INVALID examples:
+- Kubernetes → Docker
+- SQL → NoSQL
+- React → Angular (different frameworks)
+
+------------------------------------------------------------
+ALIAS HANDLING
+------------------------------------------------------------
+- AWS → Amazon Web Services
+- Azure → Microsoft Azure
+- Kubernetes → K8s
+- REST API → RESTful services, Web APIs
+- CI/CD → Pipelines, Jenkins, GitHub Actions, GitLab CI, Azure DevOps
+
+------------------------------------------------------------
+IMPORTANT CONSTRAINTS
+------------------------------------------------------------
+- Do NOT map unrelated technologies.
+- Do NOT force matches.
+- Prefer precision over recall.
+- If unsure, DO NOT include the match.
+- Every match MUST have a confidence score.
+
+------------------------------------------------------------
+SCORING RULES (CRITICAL)
+------------------------------------------------------------
+- Assign a confidence score between 0 and 1.
+- Use:
+  - 0.9+ → Exact or near-exact match
+  - 0.7–0.89 → Strong semantic match
+  - 0.5–0.69 → Weak but acceptable match
+  - <0.5 → DO NOT include
+
+------------------------------------------------------------
+OUTPUT RULES
+------------------------------------------------------------
+- Return ONLY valid JSON.
+- No explanations.
+- No extra text.
+- No markdown.
+
+------------------------------------------------------------
+OUTPUT FORMAT
+------------------------------------------------------------
+{
   "matches": [
-    {{
-      "jd_skill": "The exact name from the JD REQUIREMENTS list",
-      "candidate_skill": "The corresponding skill from the CANDIDATE SKILLS list"
-    }}
+    {
+      "jd_skill": "Exact skill from JD REQUIREMENTS",
+      "candidate_skill": "Best matching representative tool/skill",
+      "score": 0.78
+    }
   ]
-}}
+}
 """

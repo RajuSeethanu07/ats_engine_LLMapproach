@@ -1,19 +1,32 @@
 import pdfplumber
 import fitz  # PyMuPDF
 import os
+import re
+import json
+
+from services.llm_service import call_llm, clean_llm_output
+from core.prompts import JD_PROMPT, RESUME_PROMPT, SKILL_EXTRACTION_PROMPT
 
 
 # -----------------------------
-# MAIN EXTRACTION FUNCTION
+# SAFE JSON PARSER
+# -----------------------------
+def safe_json_parse(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        return {"error": "Invalid JSON", "raw": text}
+
+
+# -----------------------------
+# MAIN PDF EXTRACTION
 # -----------------------------
 def extract_text(path: str) -> str:
     """
-    Robust PDF text extraction with fallback + fault tolerance
+    Robust PDF text extraction with fallback + normalization
     """
 
-    # -----------------------------
-    # 1. VALIDATION
-    # -----------------------------
+    # VALIDATION
     if not path or not isinstance(path, str):
         print("❌ Invalid file path")
         return ""
@@ -26,14 +39,10 @@ def extract_text(path: str) -> str:
         print(f"❌ Unsupported file format: {path}")
         return ""
 
-    # -----------------------------
-    # 2. TRY pdfplumber
-    # -----------------------------
+    # TRY pdfplumber
     text, extracted_pages, total_pages = extract_with_pdfplumber(path)
 
-    # -----------------------------
-    # 3. FALLBACK → PyMuPDF
-    # -----------------------------
+    # FALLBACK → PyMuPDF
     if should_fallback(text, extracted_pages, total_pages):
         print("🔄 Switching to PyMuPDF fallback...")
         text2 = extract_with_pymupdf(path)
@@ -42,9 +51,9 @@ def extract_text(path: str) -> str:
             text = text2
             print("✅ PyMuPDF extraction improved results")
 
-    # -----------------------------
-    # 4. FINAL VALIDATION
-    # -----------------------------
+    # FINAL CLEANING
+    text = normalize_text(text)
+
     if not text.strip():
         print(f"❌ No extractable text: {path}")
         return ""
@@ -70,8 +79,7 @@ def extract_with_pdfplumber(path):
                     page_text = page.extract_text()
 
                     if page_text and page_text.strip():
-                        clean = " ".join(page_text.split())
-                        text_parts.append(clean)
+                        text_parts.append(page_text)
                         extracted_pages += 1
                     else:
                         print(f"⚠️ pdfplumber: No text on page {i+1}")
@@ -82,7 +90,7 @@ def extract_with_pdfplumber(path):
     except Exception as e:
         print(f"⚠️ pdfplumber failed: {e}")
 
-    return "\n\n".join(text_parts), extracted_pages, total_pages
+    return "\n".join(text_parts), extracted_pages, total_pages
 
 
 # -----------------------------
@@ -99,8 +107,7 @@ def extract_with_pymupdf(path):
                 page_text = page.get_text()
 
                 if page_text:
-                    clean = " ".join(page_text.split())
-                    text_parts.append(clean)
+                    text_parts.append(page_text)
                 else:
                     print(f"⚠️ PyMuPDF: No text on page {i+1}")
 
@@ -110,25 +117,46 @@ def extract_with_pymupdf(path):
     except Exception as e:
         print(f"⚠️ PyMuPDF failed: {e}")
 
-    return "\n\n".join(text_parts)
+    return "\n".join(text_parts)
 
 
 # -----------------------------
-# FALLBACK DECISION LOGIC
+# TEXT NORMALIZATION
+# -----------------------------
+def normalize_text(text: str) -> str:
+    """
+    Clean + normalize extracted text for better LLM understanding
+    """
+
+    if not text:
+        return ""
+
+    # Remove non-ASCII
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)
+
+    # Fix broken words (IMPORTANT)
+    text = re.sub(r"(\w)\s+(\w)", r"\1\2", text)
+
+    # Normalize spaces
+    text = re.sub(r"\s+", " ", text)
+
+    # Keep readability
+    text = text.replace(". ", ".\n")
+
+    return text.strip()
+
+
+# -----------------------------
+# FALLBACK DECISION
 # -----------------------------
 def should_fallback(text: str, extracted_pages: int, total_pages: int) -> bool:
-    """
-    Decide when to trigger fallback extraction
-    """
 
     if not text.strip():
         return True
 
-    # Low extraction coverage
     if total_pages > 0 and (extracted_pages / total_pages) < 0.5:
         return True
 
-    # Very low text
     if len(text.strip()) < 500:
         return True
 
@@ -136,10 +164,67 @@ def should_fallback(text: str, extracted_pages: int, total_pages: int) -> bool:
 
 
 # -----------------------------
-# SCANNED PDF DETECTION (OPTIONAL)
+# PARSE JD
 # -----------------------------
-def is_scanned_pdf(text: str) -> bool:
+def parse_jd(text: str):
+    if not text:
+        return {"error": "Empty JD text"}
+
+    prompt = JD_PROMPT.replace("{text}", text)
+
+    response = call_llm(prompt)
+    cleaned = clean_llm_output(response)
+
+    print("\n🔍 JD DEBUG")
+    print("RAW:", repr(response[:200]))
+    print("CLEANED:", repr(cleaned[:200]))
+
+    return safe_json_parse(cleaned)
+
+
+# -----------------------------
+# PARSE RESUME
+# -----------------------------
+def parse_resume(text: str):
+    if not text:
+        return {"error": "Empty resume text"}
+
+    prompt = RESUME_PROMPT.replace("{text}", text)
+
+    response = call_llm(prompt)
+    cleaned = clean_llm_output(response)
+
+    print("\n🔍 RESUME DEBUG")
+    print("RAW:", repr(response[:200]))
+    print("CLEANED:", repr(cleaned[:200]))
+
+    return safe_json_parse(cleaned)
+
+
+# -----------------------------
+# EXTRA SKILL EXTRACTION (🔥 FIX)
+# -----------------------------
+def extract_skills_from_text(raw_text: str):
     """
-    Loose detection (DO NOT block pipeline)
+    Deep skill extraction from full resume text
     """
-    return len(text.strip()) < 200
+
+    if not raw_text:
+        return []
+
+    prompt = SKILL_EXTRACTION_PROMPT.replace("{text}", raw_text)
+
+    response = call_llm(prompt)
+    cleaned = clean_llm_output(response)
+
+    try:
+        skills = json.loads(cleaned)
+
+        return list(set([
+            str(s).strip()
+            for s in skills if s
+        ]))
+
+    except Exception as e:
+        print("⚠️ Skill extraction failed:", e)
+        return []

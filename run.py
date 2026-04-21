@@ -1,4 +1,4 @@
-from services.parser import extract_text
+from services.parser import extract_text, extract_skills_from_text
 from services.llm_service import parse_jd, parse_resume
 from services.experience_engine import calculate_tech_experience
 from services.skill_matcher import match
@@ -11,8 +11,8 @@ def main():
         # -----------------------------
         # 1. EXTRACT TEXT
         # -----------------------------
-        jd_text = extract_text("sample_data/Linux Admin - C2H - Sheet1.pdf")
-        resume_text = extract_text("sample_data/30590-Banu-chenderJallu_linux-administartor_RSL.pdf")
+        jd_text = extract_text("sample_data/Senior Cloud Admin jd.pdf")
+        resume_text = extract_text("sample_data/28331-Manoj_Senior-Cloud-Admin.pdf")
 
         if not jd_text or not resume_text:
             raise ValueError("❌ Failed to extract text from input PDFs.")
@@ -37,16 +37,28 @@ def main():
             raise ValueError("JD parsing failed")
 
         # -----------------------------
-        # 🔍 DEBUG: CHECK PARSED OUTPUT
+        # 🔥 4. EXTRA SKILL EXTRACTION (NEW)
         # -----------------------------
-        print("\n================ PARSED RESUME ================\n")
-        print(json.dumps(resume, indent=2))
+        extra_skills = extract_skills_from_text(resume_text)
 
-        print("\n================ PARSED JD ================\n")
-        print(json.dumps(jd, indent=2))
+        print("\n================ EXTRA SKILLS (LLM DEEP SCAN) ================\n")
+        print(extra_skills)
 
         # -----------------------------
-        # 4. EXPERIENCE ANALYSIS (FIXED)
+        # 🔥 5. MERGE SKILLS (CRITICAL FIX)
+        # -----------------------------
+        resume["skills"] = list(set(
+            (resume.get("skills") or []) + extra_skills
+        ))
+
+        # -----------------------------
+        # 🔍 DEBUG: CHECK FINAL SKILLS
+        # -----------------------------
+        print("\n================ FINAL MERGED SKILLS ================\n")
+        print(resume["skills"])
+
+        # -----------------------------
+        # 6. EXPERIENCE ANALYSIS
         # -----------------------------
         exp_result = calculate_tech_experience(resume)
 
@@ -54,7 +66,7 @@ def main():
         print(json.dumps(exp_result, indent=2))
 
         # -----------------------------
-        # 5. SKILL MATCHING
+        # 7. SKILL MATCHING
         # -----------------------------
         skills = match(jd, resume)
 
@@ -62,12 +74,12 @@ def main():
         print(json.dumps(skills, indent=2))
 
         # -----------------------------
-        # 6. SCORING ENGINE
+        # 8. SCORING ENGINE
         # -----------------------------
         final = build_output(jd, resume, skills, exp_result)
 
         # -----------------------------
-        # 7. OUTPUT
+        # 9. OUTPUT
         # -----------------------------
         print("\n================ ATS RESULT ================\n")
         print(json.dumps(final, indent=2))

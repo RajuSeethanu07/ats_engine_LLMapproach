@@ -2,3 +2,5 @@ pdfplumber
 openai 
 python-dotenv
 pymupdf
+numpy 
+scikit-learn
